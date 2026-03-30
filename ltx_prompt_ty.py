@@ -13,14 +13,15 @@ logger = logging.getLogger("ComfyUI-LTX-Prompt-TY")
 class LTXPromptTiaoYe:
     @classmethod
     def INPUT_TYPES(s):
-        OLLAMA_MODELS = ["qwen3-vl:4b", "qwen3.5:4b", "qwen3.5:9b", "qwen3.5:27b", "qwen3.5-abliterated:4b", "qwen3.5-abliterated:9b", "qwen3.5-abliterated:27b", "qwen3-vl:8b"]
+        OLLAMA_MODELS = ["qwen3.5:9b", "qwen3.5:27b", "qwen3.5-abliterated:9b", "qwen3-vl:8b"]
         return {
             "required": {
                 "图片_1": ("IMAGE",),
                 "Ollama地址": ("STRING", {"default": "http://localhost:11434"}),
-                "模型选择": (OLLAMA_MODELS, {"default": "qwen3-vl:4b"}),
+                "模型选择": (OLLAMA_MODELS, {"default": "qwen3.5:9b"}),
                 "显存策略": (["立即卸载", "5分钟驻留", "始终驻留"], {"default": "立即卸载"}),
-                "角色与剧本分镜": ("STRING", {"multiline": True, "default": "【角色】跳爷: 银发, 深蓝唐装. 徒弟: 黑色汗衫.\n【剧本】跳爷对徒弟说：'这就是真功夫。'"}),
+                "角色特征库": ("STRING", {"multiline": True, "default": "跳爷: 银发, 深蓝唐装. 徒弟: 黑色汗衫."}),
+                "导演剧本与对话": ("STRING", {"multiline": True, "default": "跳爷对徒弟说：'这就是真功夫。'"}),
                 "对话语言": (["对话保留中文", "全篇翻译英文"], {"default": "对话保留中文"}),
                 "随机种子": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
             },
@@ -48,7 +49,7 @@ class LTXPromptTiaoYe:
             return base64.b64encode(buffered.getvalue()).decode('utf-8')
         except Exception as e: return None
 
-    def execute_ty_prompt_logic(self, 图片_1, Ollama地址, 模型选择, 显存策略, 角色与剧本分镜, 对话语言, 随机种子, **kwargs):
+    def execute_ty_prompt_logic(self, 图片_1, Ollama地址, 模型选择, 显存策略, 角色特征库, 导演剧本与对话, 对话语言, 随机种子, **kwargs):
         keep_alive_val = {"立即卸载": 0, "5分钟驻留": "5m", "始终驻留": -1}.get(显存策略, 0)
         
         try:
@@ -77,11 +78,11 @@ class LTXPromptTiaoYe:
             
             [STRUCTURE]
             - Start with main action from Frame 1.
-            - Detail kinetics, cloth physics, and character appearance from the provided character info.
+            - Detail kinetics, cloth physics, and character appearance from: {角色特征库}.
             - Describe environment and volumetric lighting.
             - Use professional camera terms (Dolly, Track, Rack Focus).
             - {lang_instruction}
-            - Context: {角色与剧本分镜}
+            - Script context: {导演剧本与对话}
             """
 
             endpoint = f"{Ollama地址.rstrip('/')}/api/chat"
@@ -89,7 +90,7 @@ class LTXPromptTiaoYe:
                 "model": 模型选择, 
                 "messages": [
                     {"role": "system", "content": system_instruction},
-                    {"role": "user", "content": f"Create a prompt for {len(b64_list)} frames. Context: {角色与剧本分镜}", "images": b64_list}
+                    {"role": "user", "content": f"Create a prompt for {len(b64_list)} frames. Scripture: {导演剧本与对话}", "images": b64_list}
                 ], 
                 "stream": False,
                 "keep_alive": keep_alive_val,
