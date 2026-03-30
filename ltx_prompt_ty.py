@@ -13,45 +13,28 @@ logger = logging.getLogger("ComfyUI-LTX-Prompt-TY")
 class LTXPromptTiaoYe:
     @classmethod
     def INPUT_TYPES(s):
-        # 根据用户最新需求定制的模型列表
-        OLLAMA_MODELS = [
-            "qwen3.5:9b", 
-            "qwen3.5:4b", 
-            "qwen3.5:27b", 
-            "qwen3.5-abliterated:4B",
-            "qwen3.5-abliterated:9b",
-            "qwen3.5-abliterated:27b",
-            "qwen3-vl:4b",
-            "qwen3-vl:8b"
-        ]
-        
+        OLLAMA_MODELS = ["qwen3-vl:4b", "qwen3.5:4b", "qwen3.5:9b", "qwen3.5:27b", "qwen3.5-abliterated:4b", "qwen3.5-abliterated:9b", "qwen3.5-abliterated:27b", "qwen3-vl:8b"]
         return {
             "required": {
                 "图片_1": ("IMAGE",),
                 "Ollama地址": ("STRING", {"default": "http://localhost:11434"}),
-                "模型选择": (OLLAMA_MODELS, {"default": "qwen3.5:9b"}),
-                "角色特征库": ("STRING", {
-                    "multiline": True, 
-                    "default": (
-                        "跳爷: 银色背头, 深蓝唐装(银丝云纹), 右手墨翠扳指。\n"
-                        "徒弟: 黑色短发, 灰色粗布汗衫, 左臂淡红伤疤。"
-                    )
-                }),
-                "跳爷导演剧本": ("STRING", {
-                    "multiline": True, 
-                    "default": "跳爷 严厉地叮嘱: '练拳先练心。'"
-                }),
+                "模型选择": (OLLAMA_MODELS, {"default": "qwen3-vl:4b"}),
+                "显存策略": (["立即卸载", "5分钟驻留", "始终驻留"], {"default": "立即卸载"}),
+                "角色与剧本分镜": ("STRING", {"multiline": True, "default": "【角色】跳爷: 银发, 深蓝唐装. 徒弟: 黑色汗衫.\n【剧本】跳爷对徒弟说：'这就是真功夫。'"}),
                 "对话语言": (["对话保留中文", "全篇翻译英文"], {"default": "对话保留中文"}),
+                "随机种子": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
             },
-            "optional": {
-                f"图片_{i}": ("IMAGE",) for i in range(2, 11)
-            }
+            "optional": { f"图片_{i}": ("IMAGE",) for i in range(2, 11) }
         }
 
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("LTX最终提示词",)
-    FUNCTION = "execute_ty_local_logic"
+    FUNCTION = "execute_ty_prompt_logic"
     CATEGORY = "🎬 LTX 提示词 跳爷"
+
+    @classmethod
+    def IS_CHANGED(s, **kwargs):
+        return float("nan")
 
     def tensor_to_base64(self, tensor):
         try:
@@ -59,53 +42,75 @@ class LTXPromptTiaoYe:
             if len(t.shape) == 4: t = t[0]
             nparr = (t.numpy() * 255).astype(np.uint8)
             img = Image.fromarray(nparr)
-            img.thumbnail((768, 768), Image.Resampling.LANCZOS)
+            img.thumbnail((512, 512), Image.Resampling.LANCZOS)
             buffered = io.BytesIO()
-            img.save(buffered, format="JPEG", quality=85)
+            img.save(buffered, format="JPEG", quality=80)
             return base64.b64encode(buffered.getvalue()).decode('utf-8')
         except Exception as e: return None
 
-    def execute_ty_local_logic(self, 图片_1, Ollama地址, 模型选择, 角色特征库, 跳爷导演剧本, 对话语言, **kwargs):
+    def execute_ty_prompt_logic(self, 图片_1, Ollama地址, 模型选择, 显存策略, 角色与剧本分镜, 对话语言, 随机种子, **kwargs):
+        keep_alive_val = {"立即卸载": 0, "5分钟驻留": "5m", "始终驻留": -1}.get(显存策略, 0)
+        
         try:
-            # 1. 序列帧处理
             all_tensors = [图片_1] if 图片_1.shape[0] == 1 else [图片_1[i].unsqueeze(0) for i in range(图片_1.shape[0])]
             for i in range(2, 11):
                 img = kwargs.get(f"图片_{i}")
-                if img is not None: all_tensors.append(img)
-            b64_list = [self.tensor_to_base64(t) for t in all_tensors if self.tensor_to_base64(t) is not None][:10]
+                if img is not None:
+                    if img.shape[0] == 1:
+                        all_tensors.append(img)
+                    else:
+                        all_tensors.extend([img[j].unsqueeze(0) for j in range(img.shape[0])])
+            b64_list = [self.tensor_to_base64(t) for t in all_tensors if self.tensor_to_base64(t) is not None]
 
-            # 2. 核心 Prompt 逻辑：对话对齐 + LTX 2.3 物理特性
-            lang_mode = "Keep dialogue in Chinese" if 对话语言 == "对话保留中文" else "Translate all to English"
-            
-            system_prompt = f"""
-            Task: Local Master Cinematic Director for LTX-Video 2.3.
-            [STRICT IDENTITY & DIALOGUE LOCK]
-            Characters: {角色特征库}
-            Script: {跳爷导演剧本}
-            
-            [DIRECTIVES]
-            1. SPEAKER ALIGNMENT: Dialogue belongs ONLY to the character named before the colon in the script. 
-            2. VISUAL SYNC: Describe mouth movement of the CORRECT speaker defined in the fingerprints. 
-            3. LTX 2.3 PHYSICS: Detail sweat/fluid absorption, cloth tension, and volumetric lighting.
-            4. MOTION: Ensure fluid motion transition across these {len(b64_list)} frames.
+            # 语言逻辑硬编码
+            if 对话语言 == "对话保留中文":
+                lang_instruction = "CRITICAL: Character dialogue (text inside double quotes) MUST be in CHINESE. All other descriptive text must be in professional English."
+            else:
+                lang_instruction = "CRITICAL: Translate the entire response, including character dialogue, into professional English."
 
-            FORMAT: One immersive natural language paragraph in English (except dialogue). 
-            START WITH: 'Photorealistic cinematic video,'
-            Sync: {lang_mode}. Quotes "" mandatory for dialogue.
+            system_instruction = f"""
+            You are a professional LTX-Video 2.3 prompt architect.
+            [STRICT RULES]
+            1. Output ONLY the prompt paragraph.
+            2. NO preamble, NO explanations, NO intro/outro.
+            3. START with 'Photorealistic cinematic video,'.
+            
+            [STRUCTURE]
+            - Start with main action from Frame 1.
+            - Detail kinetics, cloth physics, and character appearance from the provided character info.
+            - Describe environment and volumetric lighting.
+            - Use professional camera terms (Dolly, Track, Rack Focus).
+            - {lang_instruction}
+            - Context: {角色与剧本分镜}
             """
 
-            # 3. Ollama 本地请求
             endpoint = f"{Ollama地址.rstrip('/')}/api/chat"
             payload = {
                 "model": 模型选择, 
-                "messages": [{"role": "user", "content": system_prompt, "images": b64_list}], 
-                "stream": False
+                "messages": [
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": f"Create a prompt for {len(b64_list)} frames. Context: {角色与剧本分镜}", "images": b64_list}
+                ], 
+                "stream": False,
+                "keep_alive": keep_alive_val,
+                "options": {"seed": 随机种子, "temperature": 0.3}
             }
+            
             res = requests.post(endpoint, json=payload, timeout=300).json()
-            return (res['message']['content'],)
+            output = res['message']['content'].strip()
+            
+            # 清洗开头和结尾的废话
+            if "Photorealistic" in output:
+                output = output[output.find("Photorealistic"):]
+            
+            # 找到最后一个标点符号截断
+            last_punc = max(output.rfind('.'), output.rfind('"'), output.rfind('”'), output.rfind('!'), output.rfind('?'))
+            if last_punc != -1:
+                output = output[:last_punc+1]
 
-        except Exception as e:
-            return (f"本地反推执行失败: {str(e)}",)
+            return (output,)
+
+        except Exception as e: return (f"导演逻辑错误: {str(e)}",)
 
 NODE_CLASS_MAPPINGS = {"LTXPromptTiaoYe": LTXPromptTiaoYe}
 NODE_DISPLAY_NAME_MAPPINGS = {"LTXPromptTiaoYe": "🎬 LTX 提示词 跳爷"}
